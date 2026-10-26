@@ -1,13 +1,11 @@
-"""第1回: 素のLLMに1回だけ質問するスクリプト。
+"""第1回: 会話履歴を保持してLLMと対話するスクリプト。
 
 使い方:
-    uv run python -m app.ask "LoRAとは何ですか？"
-    uv run python -m app.ask            # 質問を省略すると、講座に固有の質問をする
+    uv run python -m app.ask "LoRAとは何ですか？"  # 最初の質問を指定して対話開始
+    uv run python -m app.ask                       # 既定の質問から対話開始
 
-ツールも会話履歴も持たない「素の」呼び出し。
-講座に固有のことを聞くと、「分からない」と答えるか、一般論でもっともらしく答える
-（講座の実際とは違う）ことを確かめよう。
-（第3回で、用語集を検索できるエージェントにして改善する）
+会話履歴を保ったまま続けて質問できます。
+終了するには 'exit', 'quit', 'q' を入力するか、Ctrl+C を押してください。
 """
 
 import argparse
@@ -22,27 +20,65 @@ DEFAULT_QUESTION = "AIE2026の講座の宿題にある「3レベル」とは何�
 
 
 def ask(question: str) -> str:
+    """単発の質問を行う（互換性のために維持）。"""
     client = genai.Client(api_key=get_api_key())
     response = client.models.generate_content(model=MODEL, contents=question)
 
-    # TODO(第1回 演習): response.usage_metadata から
-    #   入力トークン数と出力トークン数を表示してみよう（Copilotに頼んでよい）
+    if response.usage_metadata:
+        in_tokens = response.usage_metadata.prompt_token_count
+        out_tokens = response.usage_metadata.candidates_token_count
+        print(f"[トークン数] 入力: {in_tokens} / 出力: {out_tokens}\n")
 
     return response.text
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="素のLLMに質問する")
-    parser.add_argument("question", nargs="?", default=DEFAULT_QUESTION)
-    args = parser.parse_args()
+def interactive_chat(initial_question: str | None = None) -> None:
+    """会話履歴を保持しながら対話的に質問を続ける。"""
+    client = genai.Client(api_key=get_api_key())
+    chat = client.chats.create(model=MODEL)
+
+    def _send_and_print(prompt: str) -> None:
+        try:
+            response = chat.send_message(prompt)
+            if response.usage_metadata:
+                in_tokens = response.usage_metadata.prompt_token_count
+                out_tokens = response.usage_metadata.candidates_token_count
+                print(f"[トークン数] 入力: {in_tokens} / 出力: {out_tokens}\n")
+            print(response.text)
+        except errors.APIError as e:
+            print(api_error_message(e.code, e.message))
 
     print(f"[model] {MODEL}")
-    print(f"[質問] {args.question}\n")
-    try:
-        print(ask(args.question))
-    except errors.APIError as e:
-        print(api_error_message(e.code, e.message))
-        raise SystemExit(1)
+    print("会話モードを開始します。（終了するには 'exit', 'quit', または 'q' と入力してください）\n")
+
+    question = initial_question if initial_question is not None else DEFAULT_QUESTION
+    print(f"[質問] {question}\n")
+    _send_and_print(question)
+
+    while True:
+        try:
+            print("-" * 50)
+            user_input = input("\n[続けて質問] > ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n対話を終了します。")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit", "q"):
+            print("対話を終了します。")
+            break
+
+        print(f"\n[質問] {user_input}\n")
+        _send_and_print(user_input)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="LLMと対話形式で質問する")
+    parser.add_argument("question", nargs="?", default=None, help="最初の質問（省略時は講座の既定質問から開始）")
+    args = parser.parse_args()
+
+    interactive_chat(args.question)
 
 
 if __name__ == "__main__":
